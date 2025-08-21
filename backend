@@ -1,0 +1,216 @@
+# backend_fin.py
+import psycopg2
+from datetime import datetime
+
+# Database connection details - fill these in!
+# WARNING: Do not commit sensitive credentials to a public repository.
+DB_HOST = "localhost"
+DB_NAME = "personal financial portfolio tracker"
+DB_USER = "postgres"
+DB_PASSWORD = "2121"
+
+def get_db_connection():
+    """Establishes a connection to the PostgreSQL database."""
+    try:
+        conn = psycopg2.connect(
+            host=DB_HOST,
+            database=DB_NAME,
+            user=DB_USER,
+            password=DB_PASSWORD
+        )
+        return conn
+    except psycopg2.OperationalError as e:
+        print(f"Error connecting to the database: {e}")
+        return None
+
+def create_table():
+    """
+    Creates the 'transactions' table if it doesn't already exist.
+    This function should be run once to initialize the database.
+    """
+    conn = get_db_connection()
+    if conn is None:
+        return
+    
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS transactions (
+                    transaction_id VARCHAR(255) PRIMARY KEY,
+                    transaction_date DATE NOT NULL,
+                    description TEXT,
+                    amount DECIMAL(10, 2) NOT NULL,
+                    type VARCHAR(20) CHECK (type IN ('Revenue', 'Expense'))
+                );
+            """)
+        conn.commit()
+    except (Exception, psycopg2.DatabaseError) as error:
+        print(f"Error creating table: {error}")
+    finally:
+        if conn:
+            conn.close()
+
+def add_transaction(transaction_id, transaction_date, description, amount, transaction_type):
+    """Adds a new transaction to the database."""
+    conn = get_db_connection()
+    if conn is None:
+        return False
+    
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO transactions (transaction_id, transaction_date, description, amount, type)
+                VALUES (%s, %s, %s, %s, %s);
+            """, (transaction_id, transaction_date, description, amount, transaction_type))
+        conn.commit()
+        return True
+    except (Exception, psycopg2.DatabaseError) as error:
+        print(f"Error adding transaction: {error}")
+        return False
+    finally:
+        if conn:
+            conn.close()
+
+def get_transactions(transaction_type=None, sort_by=None):
+    """
+    Fetches all transactions from the database with optional
+    filtering and sorting.
+    """
+    conn = get_db_connection()
+    if conn is None:
+        return []
+    
+    transactions = []
+    try:
+        with conn.cursor() as cur:
+            query = "SELECT * FROM transactions"
+            params = []
+            
+            # Filtering
+            if transaction_type and transaction_type != "All":
+                query += " WHERE type = %s"
+                params.append(transaction_type)
+            
+            # Sorting
+            if sort_by == 'Amount Asc':
+                query += " ORDER BY amount ASC"
+            elif sort_by == 'Amount Desc':
+                query += " ORDER BY amount DESC"
+            elif sort_by == 'Date Asc':
+                query += " ORDER BY transaction_date ASC"
+            elif sort_by == 'Date Desc':
+                query += " ORDER BY transaction_date DESC"
+            else:
+                query += " ORDER BY transaction_date DESC" # Default sort
+
+            cur.execute(query, params)
+            transactions = cur.fetchall()
+            
+    except (Exception, psycopg2.DatabaseError) as error:
+        print(f"Error fetching transactions: {error}")
+    finally:
+        if conn:
+            conn.close()
+    
+    return transactions
+
+def get_aggregations():
+    """
+    Calculates and returns various aggregate values from the database.
+    Returns a dictionary of results.
+    """
+    conn = get_db_connection()
+    if conn is None:
+        return {}
+    
+    results = {}
+    try:
+        with conn.cursor() as cur:
+            # COUNT: Total number of transactions
+            cur.execute("SELECT COUNT(*) FROM transactions;")
+            results['total_count'] = cur.fetchone()[0]
+
+            # SUM: Total Revenue
+            cur.execute("SELECT SUM(amount) FROM transactions WHERE type = 'Revenue';")
+            results['total_revenue'] = cur.fetchone()[0] or 0
+
+            # SUM: Total Expenses
+            cur.execute("SELECT SUM(amount) FROM transactions WHERE type = 'Expense';")
+            results['total_expenses'] = cur.fetchone()[0] or 0
+    except (Exception, psycopg2.DatabaseError) as error:
+        print(f"Error calculating aggregations: {error}")
+        return {}
+    finally:
+        if conn:
+            conn.close()
+    
+    return results
+
+def get_net_income():
+    """Calculates the net income (Revenue - Expenses)."""
+    conn = get_db_connection()
+    if conn is None:
+        return 0
+        
+    net_income = 0
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    COALESCE(SUM(CASE WHEN type = 'Revenue' THEN amount ELSE 0 END), 0) -
+                    COALESCE(SUM(CASE WHEN type = 'Expense' THEN amount ELSE 0 END), 0)
+                FROM transactions;
+            """)
+            net_income = cur.fetchone()[0] or 0
+    except (Exception, psycopg2.DatabaseError) as error:
+        print(f"Error calculating net income: {error}")
+        return 0
+    finally:
+        if conn:
+            conn.close()
+            
+    return net_income
+
+def update_transaction(transaction_id, new_date, new_description, new_amount, new_type):
+    """Updates an existing transaction by its ID."""
+    conn = get_db_connection()
+    if conn is None:
+        return False
+    
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE transactions
+                SET transaction_date = %s,
+                    description = %s,
+                    amount = %s,
+                    type = %s
+                WHERE transaction_id = %s;
+            """, (new_date, new_description, new_amount, new_type, transaction_id))
+        conn.commit()
+        return cur.rowcount > 0
+    except (Exception, psycopg2.DatabaseError) as error:
+        print(f"Error updating transaction: {error}")
+        return False
+    finally:
+        if conn:
+            conn.close()
+
+def delete_transaction(transaction_id):
+    """Deletes a transaction by its ID."""
+    conn = get_db_connection()
+    if conn is None:
+        return False
+    
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM transactions WHERE transaction_id = %s;", (transaction_id,))
+        conn.commit()
+        return cur.rowcount > 0
+    except (Exception, psycopg2.DatabaseError) as error:
+        print(f"Error deleting transaction: {error}")
+        return False
+    finally:
+        if conn:
+            conn.close()
+
