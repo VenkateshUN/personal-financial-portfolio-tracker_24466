@@ -1,0 +1,135 @@
+# frontend_fin.py
+import streamlit as st
+import pandas as pd
+import uuid
+from datetime import date
+from backend_mar import (
+    create_table,
+    add_transaction,
+    get_transactions,
+    get_aggregations,
+    get_net_income,
+    update_transaction,
+    delete_transaction,
+)
+
+# Initialize the database table when the app starts.
+# Note: This is an idempotent operation, so it's safe to run every time.
+create_table()
+
+st.set_page_config(layout="wide", page_title="Finance Tracker")
+st.title("Finance: Revenue & Expense Tracker 💰")
+st.markdown("### Quick overview of company's financial health")
+
+# --- Business Insights Section (Aggregation) ---
+st.header("Business Insights")
+col1, col2, col3, col4 = st.columns(4)
+
+# Fetch aggregation data
+aggregations = get_aggregations()
+net_income = get_net_income()
+
+with col1:
+    st.metric(label="Total Transactions", value=aggregations['total_count'])
+with col2:
+    # Format as currency
+    st.metric(label="Total Revenue", value=f"${aggregations['total_revenue']:.2f}")
+with col3:
+    # Format as currency
+    st.metric(label="Total Expenses", value=f"${aggregations['total_expenses']:.2f}")
+with col4:
+    # Format as currency, and change color based on value
+    net_income_color = "green" if net_income >= 0 else "red"
+    st.markdown(
+        f"<p style='color:{net_income_color}; font-size: 2.2em; font-weight: bold;'>Net Income: ${net_income:.2f}</p>",
+        unsafe_allow_html=True
+    )
+    
+st.markdown("---")
+
+# --- Add New Transaction (CREATE) ---
+st.header("Add a New Transaction")
+with st.form("add_transaction_form", clear_on_submit=True):
+    col1, col2 = st.columns(2)
+    with col1:
+        description = st.text_area("Description")
+        amount = st.number_input("Amount", min_value=0.01, format="%.2f")
+    with col2:
+        transaction_date = st.date_input("Transaction Date", date.today())
+        transaction_type = st.radio("Type", ('Revenue', 'Expense'))
+    
+    submitted = st.form_submit_button("Add Transaction")
+    if submitted:
+        if description and amount and transaction_date and transaction_type:
+            # Generate a unique ID for the transaction
+            transaction_id = str(uuid.uuid4())
+            if add_transaction(transaction_id, transaction_date, description, amount, transaction_type):
+                st.success("Transaction added successfully!")
+                st.rerun()
+            else:
+                st.error("Failed to add transaction. Check database connection.")
+        else:
+            st.warning("Please fill out all fields.")
+
+st.markdown("---")
+
+# --- View & Filter Transactions (READ) ---
+st.header("View All Transactions")
+# Filtering and sorting controls
+col1, col2 = st.columns(2)
+with col1:
+    filter_type = st.selectbox("Filter by Type", ("All", "Revenue", "Expense"))
+with col2:
+    sort_by = st.selectbox("Sort by", ("Date Desc", "Date Asc", "Amount Desc", "Amount Asc"))
+
+# Fetch and display transactions
+transactions_data = get_transactions(filter_type, sort_by)
+if transactions_data:
+    df_transactions = pd.DataFrame(
+        transactions_data,
+        columns=["transaction_id", "transaction_date", "description", "amount", "type"]
+    )
+    # Convert 'amount' column to numeric
+    df_transactions['amount'] = pd.to_numeric(df_transactions['amount'])
+    
+    st.dataframe(df_transactions, use_container_width=True, hide_index=True)
+else:
+    st.info("No transactions to display.")
+
+st.markdown("---")
+
+# --- Update & Delete Transactions (UPDATE/DELETE) ---
+st.header("Update or Delete a Transaction")
+# Get a list of transaction IDs for the select box
+transaction_ids = [row[0] for row in transactions_data]
+selected_id = st.selectbox("Select Transaction to Edit/Delete", transaction_ids, index=None)
+
+if selected_id:
+    # Find the selected transaction data to pre-populate the form
+    selected_row = df_transactions[df_transactions["transaction_id"] == selected_id].iloc[0]
+
+    with st.container():
+        st.subheader(f"Editing Transaction ID: {selected_id}")
+        col1_u, col2_u = st.columns(2)
+        with col1_u:
+            new_date = st.date_input("New Date", value=selected_row['transaction_date'])
+            new_description = st.text_area("New Description", value=selected_row['description'])
+        with col2_u:
+            new_amount = st.number_input("New Amount", value=float(selected_row['amount']), min_value=0.01)
+            new_type = st.radio("New Type", ('Revenue', 'Expense'), index=0 if selected_row['type'] == 'Revenue' else 1)
+        
+        col_buttons = st.columns(2)
+        with col_buttons[0]:
+            if st.button("Update Transaction"):
+                if update_transaction(selected_id, new_date, new_description, new_amount, new_type):
+                    st.success("Transaction updated successfully!")
+                    st.rerun()
+                else:
+                    st.error("Failed to update transaction.")
+        with col_buttons[1]:
+            if st.button("Delete Transaction"):
+                if delete_transaction(selected_id):
+                    st.success("Transaction deleted successfully!")
+                    st.rerun()
+                else:
+                    st.error("Failed to delete transaction.")
